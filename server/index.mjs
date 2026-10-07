@@ -282,16 +282,32 @@ async function serveStatic(request, response, url) {
   createReadStream(target).pipe(response)
 }
 
-await initDb()
-await bootstrapAdmin()
-await bootstrapDemoAccount()
-await sql`DELETE FROM app_sessions WHERE expires_at < now()`
-const server = createServer(async (request, response) => {
+let initialization
+async function initializeBackend() {
+  if (!initialization) {
+    initialization = (async () => {
+      await initDb()
+      await bootstrapAdmin()
+      await bootstrapDemoAccount()
+      await sql`DELETE FROM app_sessions WHERE expires_at < now()`
+    })().catch((error) => { initialization = undefined; throw error })
+  }
+  return initialization
+}
+
+async function handleRequest(request, response, serveFrontend) {
   secureHeaders(response)
   try {
     const url = new URL(request.url || '/', `http://${request.headers.host || 'localhost'}`)
+    // Auth configuration is safe to serve without a database connection; this
+    // lets the login page show registration/demo options even during DB trouble.
+    if (request.method === 'GET' && url.pathname === '/api/auth/config') {
+      await api(request, response, url)
+      return
+    }
+    await initializeBackend()
     if (url.pathname.startsWith('/api/')) await api(request, response, url)
-    else if (request.method === 'GET' || request.method === 'HEAD') await serveStatic(request, response, url)
+    else if (serveFrontend && (request.method === 'GET' || request.method === 'HEAD')) await serveStatic(request, response, url)
     else sendJson(response, 405, { error: 'Method not allowed.' }, { Allow: 'GET, HEAD' })
   } catch (error) {
     const status = error.status || 500
@@ -299,8 +315,16 @@ const server = createServer(async (request, response) => {
     if (!response.headersSent) sendJson(response, status, { error: status < 500 ? error.message : 'The server could not complete the request.' })
     else response.destroy()
   }
-})
+}
 
-server.listen(port, '0.0.0.0', () => console.info(`Analytics API ready at http://localhost:${port}`))
-const cleanup = setInterval(() => { sql`DELETE FROM app_sessions WHERE expires_at < now()`.catch((error) => console.error('Session cleanup failed:', error)) }, 60 * 60_000)
-cleanup.unref()
+export async function handleApiRequest(request, response) {
+  return handleRequest(request, response, false)
+}
+
+if (process.env.VERCEL !== '1') {
+  await initializeBackend()
+  const server = createServer((request, response) => handleRequest(request, response, true))
+  server.listen(port, '0.0.0.0', () => console.info(`Analytics API ready at http://localhost:${port}`))
+  const cleanup = setInterval(() => { sql`DELETE FROM app_sessions WHERE expires_at < now()`.catch((error) => console.error('Session cleanup failed:', error)) }, 60 * 60_000)
+  cleanup.unref()
+}

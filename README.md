@@ -71,6 +71,6 @@ Revenue is `Price × Quantity`. The assessment data contains 300,000 sale lines 
 
 ## Deployment and security
 
-The Render Blueprint is in `render.yaml`; set database and admin secrets in Render’s private environment settings. The Docker image also runs the Node API and built frontend; supply its environment with `--env-file .env`. Neither deployment includes the workbook or local aggregate, so seed Neon before serving the dashboard.
+For Vercel, the root `api/[...route].mjs` function serves the existing Node API alongside the Vite frontend. Add `DATABASE_URL`, a random `SESSION_SECRET` of at least 32 characters, `ALLOW_REGISTRATION=true`, `DEMO_USERNAME=californiaburrito`, and `DEMO_PASSWORD=californiaburrito` in the Vercel project’s environment settings, then redeploy. Seed Neon before deployment; `.env` is local only and is not uploaded. The Render Blueprint is in `render.yaml`; set database and admin secrets in Render’s private environment settings. The Docker image also runs the Node API and built frontend; supply its environment with `--env-file .env`.
 
 Never commit `.env`, database URLs, passwords, or private source data. `.env.example` contains sample configuration and the intentionally public demo-account defaults; use demo credentials only with the assessment dataset. GitHub Actions runs `npm audit`, typecheck, and the production build on pushes and pull requests.
