@@ -40,6 +40,24 @@ export async function bootstrapAdmin() {
   }
 }
 
+export async function bootstrapDemoAccount() {
+  const username = process.env.DEMO_USERNAME?.trim().toLowerCase()
+  const password = process.env.DEMO_PASSWORD
+  if (!username || !password) return
+  if (!/^[a-z0-9][a-z0-9._-]{2,39}$/.test(username) || password.length < 12 || password.length > 256) {
+    if (process.env.ALLOW_REGISTRATION === 'true') {
+      console.warn('Skipping the demo account because its configured credentials are invalid.')
+      return
+    }
+    throw new Error('DEMO_USERNAME must be valid and DEMO_PASSWORD must be 12 to 256 characters.')
+  }
+  const email = `${username}@demo.local`
+  await sql`INSERT INTO app_users (id, email, password_hash, display_name)
+    VALUES (${randomUUID()}, ${email}, ${encodePassword(password)}, 'California Burrito Guest')
+    ON CONFLICT (email) DO UPDATE SET password_hash = EXCLUDED.password_hash, display_name = EXCLUDED.display_name`
+  console.info('California Burrito demo account is ready.')
+}
+
 export function sessionCookie(sessionId, secure) {
   const value = `${sessionId}.${digest(sessionId)}`
   return `${cookieName}=${value}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${maxAgeSeconds}${secure ? '; Secure' : ''}`
@@ -78,8 +96,11 @@ export async function createSession(userId) {
 }
 
 export async function authenticate(email, password) {
+  const identifier = email.trim().toLowerCase()
+  const demoUsername = process.env.DEMO_USERNAME?.trim().toLowerCase()
+  const accountEmail = demoUsername && identifier === demoUsername ? `${demoUsername}@demo.local` : identifier
   const [user] = await sql`SELECT id, email, display_name AS "displayName", password_hash
-    FROM app_users WHERE email = ${email.trim().toLowerCase()} LIMIT 1`
+    FROM app_users WHERE email = ${accountEmail} LIMIT 1`
   if (!user || !verifyPassword(password, user.password_hash)) return null
   return { id: user.id, email: user.email, displayName: user.displayName }
 }

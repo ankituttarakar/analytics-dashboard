@@ -20,7 +20,9 @@ services:
         sync: false
       - key: ADMIN_PASSWORD
         sync: false
-      - key: OPENAI_API_KEY
-        sync: false
+      - key: DEMO_USERNAME
+        value: californiaburrito
+      - key: DEMO_PASSWORD
+        value: californiaburrito
       - key: ALLOW_REGISTRATION
         value: "true"

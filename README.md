@@ -1,95 +1,76 @@
 # Analytics Dashboard
 
-A React + TypeScript sales analytics site with a Node.js API, Neon PostgreSQL, ECharts, authentication, CSV exports, and AI-assisted insights.
+A sales analytics dashboard for Burger Town, built with React and TypeScript, a Node.js API, Neon PostgreSQL, and Apache ECharts.
 
 ## Features
 
-- Responsive overview for desktop and mobile, including revenue, orders, product mix, outlet and channel performance.
-- Combined date, outlet, category, item, order type, and payment filters; all visualizations and KPIs use the same selection.
-- CSV export of the selected KPIs, category and outlet totals, top products, and daily revenue.
-- Email/password sign-in and self-service account creation, scrypt password hashes, signed HTTP-only sessions, request throttling, and same-origin checks.
-- ECharts visualizations and server-side database access. The dashboard data endpoint requires a valid session.
-- Optional OpenAI-generated insights from aggregate metrics only. With no `OPENAI_API_KEY`, factual metric-based highlights are shown instead. AI requests set `store: false`.
-- Compressed API responses, a five-minute in-memory Neon snapshot cache, indexes for common dimensions, and cached insight responses.
-- GitHub Actions CI, a Docker image, and a Render Blueprint for infrastructure setup.
+- Filter by date, outlet, category, menu item, order type, and payment channel.
+- View revenue, orders, product performance, outlet comparisons, and sales channels.
+- Export the current filtered view as CSV.
+- Sign in or create an account. Passwords use scrypt hashes and sessions use signed, HTTP-only cookies.
+- Responsive desktop and mobile layouts with section navigation.
+- Sales highlights are calculated directly from filtered metrics; the app does not call an AI provider.
+- Compressed dashboard responses and five-minute server-side data caching.
 
 ## Stack
 
 - Frontend: React 18, TypeScript, Vite
-- Backend: Node.js HTTP server
+- API: Node.js HTTP server
 - Database: Neon Serverless PostgreSQL
 - Charts: Apache ECharts
 
-## Local setup
+## Run locally
 
-You need Node.js 22+, a Neon PostgreSQL database, and the assessment workbook for the initial data load. The workbook and compressed aggregate are ignored by Git.
+Requirements: Node.js 22 or later and access to a Neon database that has been seeded with the dashboard aggregates.
 
-1. Copy `.env.example` to `.env` and fill in `DATABASE_URL`, `SESSION_SECRET`, `ADMIN_EMAIL`, and `ADMIN_PASSWORD`. Use a unique password of at least 12 characters. Generate the session secret with:
+1. Install Node dependencies and create a local environment file:
+
+   ```powershell
+   npm ci
+   Copy-Item .env.example .env
+   ```
+
+2. Edit `.env` and set `DATABASE_URL`, a random `SESSION_SECRET` of at least 32 characters, `ADMIN_EMAIL`, and `ADMIN_PASSWORD` (at least 12 characters). Generate a session secret with:
 
    ```powershell
    node -e "console.log(require('node:crypto').randomBytes(48).toString('base64url'))"
    ```
 
-2. Build the aggregate from the source workbook. This keeps raw bill/order identifiers out of the database and browser:
-
-   ```powershell
-   python -m pip install pandas openpyxl
-   npm run data:build -- "C:\Users\ankit\Downloads\data.xlsx"
-   ```
-
-3. Install packages, create the Neon tables, and import the aggregate cubes:
-
-   ```powershell
-   npm ci
-   npm run db:seed
-   ```
-
-   The first configured admin account is created only if the database has no users. The seed script is safe to rerun; inserts use conflict protection and never import `BillNo` values.
-
-4. Start the API and Vite together:
+3. Start the API and frontend together:
 
    ```powershell
    npm run dev
    ```
 
-   Open the Vite URL (normally `http://localhost:5173`). Sign in with the configured admin credentials, or create an account from the sign-in page.
+   Open the Vite URL shown in the terminal, usually `http://localhost:5173`. Sign in with the configured admin account, use the demo account configured in `.env`, or create an account if `ALLOW_REGISTRATION=true`.
 
-To validate types and create the production frontend build:
+To verify the frontend and TypeScript:
 
 ```powershell
 npm run typecheck
 npm run build
-npm start
 ```
 
-`npm start` serves the built site and API on port 3001 by default. Set `PORT` to change it.
+`npm start` serves the production build and API on port 3001 by default. Set `PORT` to change it.
 
-## Data and metric definitions
+## Load or refresh data
 
-The workbook contains 300,000 sale lines. `BillNo` identifies an order and is used only during local aggregation; it is never included in the exported cubes. `Price × Quantity` is revenue. Order counts are exact distinct orders, including category and item filters, using compact membership masks.
+The assessment workbook and generated aggregate are intentionally excluded from Git. To seed a new or updated database, obtain the provided `data.xlsx` workbook, then run:
 
-The source covers 17 June 2025 through 16 June 2026, with six outlets, seven categories, 45 menu items, three order types, and four settlement methods. Baseline totals are 110,478 orders, ₹69,480,952 revenue, and 434,448 units. Zero-priced rows are retained as recorded.
-
-Average revenue per matching order is filtered revenue divided by orders containing the selected filters. When an item filter is selected, this is not full basket value.
-
-The compressed aggregate is saved under `data/` for seeding, ignored by Git, and never placed in Vite's public assets. Neon stores only the aggregate cubes and dimension metadata, not source row identifiers.
-
-## Secrets and account setup
-
-- Never commit `.env`, Neon connection strings, admin passwords, or AI keys. `.env*` is ignored except for the safe `.env.example` template.
-- `SESSION_SECRET` must be a private random value of at least 32 characters. Cookies are HTTP-only and use `Secure` when `NODE_ENV=production`.
-- The first account is bootstrapped from `ADMIN_EMAIL` and `ADMIN_PASSWORD` only when `app_users` is empty. With `ALLOW_REGISTRATION=true`, visitors can create their own accounts from the sign-in page. This is enabled for evaluator access; anyone who can reach the deployed site can register. If these optional admin credentials are invalid while registration is enabled, startup skips creating the admin so visitors can still sign up.
-- `OPENAI_API_KEY` is optional. If configured, only filtered aggregate sales metrics are sent to the Responses API; no workbook rows, bill numbers, emails, or credentials are included.
-
-## Deploy
-
-The repo no longer publishes a static GitHub Pages site because that would bypass the Node API and login. GitHub Actions runs CI on pushes to `main`. To deploy on Render, create a Neon project, push this repository, and create the service from `render.yaml`; enter `DATABASE_URL`, `ADMIN_EMAIL`, and `ADMIN_PASSWORD` in Render's private environment settings (Render generates the session secret). Add `OPENAI_API_KEY` only if AI text generation is desired. Build the ignored aggregate locally and run `npm run db:seed` against the production Neon URL from a trusted machine before opening the site. Never put these secrets in GitHub Actions logs or repository files.
-
-For container deployment:
-
-```bash
-docker build -t analytics-dashboard .
-docker run --env-file .env -p 3001:3001 analytics-dashboard
+```powershell
+python -m pip install -r requirements.txt
+npm run data:build -- "C:\path\to\data.xlsx"
+npm run db:seed
 ```
 
-The Docker image includes the built app and server, but not the assessment workbook or ignored aggregate.
+The aggregate is written to `data/dashboard.json.gz`. Local development uses it directly when available; production reads the aggregate cubes from Neon. Keep the workbook and generated file private. `BillNo` is used locally to calculate distinct order counts and is not stored in the database or sent to the browser.
+
+## Data definitions
+
+Revenue is `Price × Quantity`. The assessment data contains 300,000 sale lines and 110,478 distinct orders. When category or item filters are selected, order counts include orders containing those selections; revenue per order is filtered revenue divided by those matching orders.
+
+## Deployment and security
+
+The Render Blueprint is in `render.yaml`; set database and admin secrets in Render’s private environment settings. The Docker image also runs the Node API and built frontend; supply its environment with `--env-file .env`. Neither deployment includes the workbook or local aggregate, so seed Neon before serving the dashboard.
+
+Never commit `.env`, database URLs, passwords, or private source data. `.env.example` contains sample configuration and the intentionally public demo-account defaults; use demo credentials only with the assessment dataset. GitHub Actions runs `npm audit`, typecheck, and the production build on pushes and pull requests.

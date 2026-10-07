@@ -1,16 +1,18 @@
 import 'dotenv/config'
 import { createServer } from 'node:http'
-import { createReadStream, existsSync } from 'node:fs'
+import { createReadStream, existsSync, readFileSync } from 'node:fs'
 import { extname, resolve, sep } from 'node:path'
-import { gzipSync } from 'node:zlib'
+import { gzipSync, gunzipSync } from 'node:zlib'
 import { randomUUID } from 'node:crypto'
+import { setTimeout as delay } from 'node:timers/promises'
 import { sql, initDb } from './db.mjs'
-import { authenticate, bootstrapAdmin, clearSessionCookie, createSession, getSession, hashPassword, sessionCookie } from './security.mjs'
+import { authenticate, bootstrapAdmin, bootstrapDemoAccount, clearSessionCookie, createSession, getSession, hashPassword, sessionCookie } from './security.mjs'
 
 const port = Number(process.env.PORT || 3001)
 const maxBodyBytes = 64 * 1024
 const rateLimits = new Map()
 let dashboardCache
+let dashboardLoadPromise
 const insightCache = new Map()
 const mimeTypes = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.json': 'application/json; charset=utf-8', '.gz': 'application/gzip', '.woff2': 'font/woff2' }
 
@@ -55,7 +57,17 @@ function checkSameOrigin(request, response) {
   const origin = request.headers.origin
   if (!origin) return false
   try {
-    if (new URL(origin).host === request.headers.host) return false
+    const originUrl = new URL(origin)
+    if (originUrl.host === request.headers.host) return false
+    const loopbackHosts = new Set(['localhost', '127.0.0.1', '::1'])
+    const apiUrl = new URL(`http://${request.headers.host || ''}`)
+    const vitePort = Number(originUrl.port)
+    const isViteDevProxy = process.env.NODE_ENV !== 'production'
+      && loopbackHosts.has(originUrl.hostname)
+      && vitePort >= 5173 && vitePort <= 5199
+      && loopbackHosts.has(apiUrl.hostname)
+      && apiUrl.port === String(port)
+    if (isViteDevProxy) return false
   } catch { /* rejected below */ }
   sendJson(response, 403, { error: 'Cross-origin request rejected.' })
   return true
@@ -70,20 +82,61 @@ async function requireUser(request, response) {
   return session
 }
 
-async function getPackedDashboard() {
+async function loadPackedDashboard() {
   if (dashboardCache && dashboardCache.expiresAt > Date.now()) return dashboardCache
+  // Local development already has the compact, privacy-safe seed artifact.
+  // Reuse it rather than making hundreds of Neon HTTP reads on every restart.
+  const localSnapshotPath = resolve('data/dashboard.json.gz')
+  if (process.env.NODE_ENV !== 'production' && existsSync(localSnapshotPath)) {
+    const compressed = readFileSync(localSnapshotPath)
+    const body = gunzipSync(compressed).toString('utf8')
+    dashboardCache = { body, compressed, expiresAt: Date.now() + 5 * 60_000 }
+    return dashboardCache
+  }
   const [metaRow] = await sql`SELECT payload FROM dashboard_meta WHERE id = 1`
   if (!metaRow) throw Object.assign(new Error('Dashboard data has not been loaded into Neon yet. Run npm run db:seed.'), { status: 503 })
   const meta = typeof metaRow.payload === 'string' ? JSON.parse(metaRow.payload) : metaRow.payload
-  const [lineRows, orderRows] = await Promise.all([
-    sql`SELECT day::text AS day, outlet, category, item, order_type AS "orderType", settlement,
-      revenue::float8 AS revenue, quantity::int AS quantity, line_items::int AS "lineItems"
-      FROM line_cube ORDER BY day, outlet, category, item, order_type, settlement`,
-    sql`SELECT day::text AS day, outlet, order_type AS "orderType", settlement,
-      group_mask::text AS "groupMask", item_mask::text AS "itemMask", orders::int AS orders,
-      revenue::float8 AS revenue, quantity::int AS quantity, line_items::int AS "lineItems"
-      FROM order_cube ORDER BY day, outlet, order_type, settlement`
-  ])
+  const lineRows = []
+  const orderRows = []
+  const start = Date.parse(`${meta.dateMin}T00:00:00.000Z`)
+  const end = Date.parse(`${meta.dateMax}T00:00:00.000Z`) + 24 * 60 * 60 * 1000
+  const chunkMs = 14 * 24 * 60 * 60 * 1000
+  const ranges = []
+  for (let cursor = start; cursor < end; cursor += chunkMs) {
+    ranges.push({
+      start: new Date(cursor).toISOString().slice(0, 10),
+      end: new Date(Math.min(cursor + chunkMs, end)).toISOString().slice(0, 10)
+    })
+  }
+  const fetchRange = async ({ start: chunkStart, end: chunkEnd }) => {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        return await Promise.all([
+          sql`SELECT day::text AS day, outlet, category, item, order_type AS "orderType", settlement,
+            revenue::float8 AS revenue, quantity::int AS quantity, line_items::int AS "lineItems"
+            FROM line_cube WHERE day >= ${chunkStart}::date AND day < ${chunkEnd}::date`,
+          sql`SELECT day::text AS day, outlet, order_type AS "orderType", settlement,
+            group_mask::text AS "groupMask", item_mask::text AS "itemMask", orders::int AS orders,
+            revenue::float8 AS revenue, quantity::int AS quantity, line_items::int AS "lineItems"
+            FROM order_cube WHERE day >= ${chunkStart}::date AND day < ${chunkEnd}::date`
+        ])
+      } catch (error) {
+        const transient = error?.cause?.code === 'UND_ERR_SOCKET' || error?.code === 'UND_ERR_SOCKET'
+          || (error instanceof TypeError && /terminated|fetch failed/i.test(error.message))
+        if (!transient || attempt > 0) throw error
+        await delay(250)
+      }
+    }
+  }
+  // Run more small, predictable queries at once to reduce round trips without
+  // creating the oversized responses that caused transient Neon socket drops.
+  for (let offset = 0; offset < ranges.length; offset += 8) {
+    const batch = await Promise.all(ranges.slice(offset, offset + 8).map(fetchRange))
+    for (const [lines, orders] of batch) {
+      lineRows.push(...lines)
+      orderRows.push(...orders)
+    }
+  }
   const days = [...new Set(lineRows.map((r) => r.day))].sort()
   const dayIndex = new Map(days.map((value, index) => [value, index]))
   const outletIndex = new Map(meta.outlets.map((value, index) => [value, index]))
@@ -98,6 +151,14 @@ async function getPackedDashboard() {
   return dashboardCache
 }
 
+async function getPackedDashboard() {
+  if (dashboardCache && dashboardCache.expiresAt > Date.now()) return dashboardCache
+  if (!dashboardLoadPromise) {
+    dashboardLoadPromise = loadPackedDashboard().finally(() => { dashboardLoadPromise = undefined })
+  }
+  return dashboardLoadPromise
+}
+
 function rulesBasedInsights(metrics) {
   const result = []
   const topOutlet = metrics.outlets?.[0]
@@ -107,8 +168,12 @@ function rulesBasedInsights(metrics) {
   if (topCategory) result.push(`${topCategory.name} is the strongest category, contributing ${Math.round(topCategory.share)}% of sales.`)
   if (topItem) result.push(`${topItem.name} is the top item in this selection at ₹${Math.round(topItem.revenue).toLocaleString('en-IN')}.`)
   if (metrics.dailyChange != null) result.push(`The latest day is ${Math.abs(metrics.dailyChange).toFixed(1)}% ${metrics.dailyChange >= 0 ? 'above' : 'below'} the earlier daily average.`)
+  if (metrics.orders > 0 && result.length < 4) {
+    const averageOrderValue = Math.round(metrics.revenue / metrics.orders)
+    result.push(`Average revenue per order in this selection is ₹${averageOrderValue.toLocaleString('en-IN')}.`)
+  }
   if (!result.length) result.push('There is not enough activity in this filter selection to highlight a trend yet.')
-  return result
+  return result.slice(0, 4)
 }
 
 function sanitizeMetrics(input) {
@@ -124,22 +189,8 @@ function sanitizeMetrics(input) {
   return { revenue: amount(input.revenue), orders: amount(input.orders), quantity: amount(input.quantity), dailyChange, outlets: entities(input.outlets, true), categories: entities(input.categories, true), items: entities(input.items) }
 }
 
-async function generateInsights(metrics) {
-  const apiKey = process.env.OPENAI_API_KEY
-  if (!apiKey) return { insights: rulesBasedInsights(metrics), source: 'metrics' }
-  const response = await fetch('https://api.openai.com/v1/responses', {
-    method: 'POST', headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model: process.env.OPENAI_MODEL || 'gpt-4.1-mini', store: false, instructions: 'Write 3 short, factual business insights from the supplied aggregate sales metrics. Do not invent causes, forecasts, or facts. Use INR for money. Return a JSON object with an insights array of strings.', input: JSON.stringify(metrics), text: { format: { type: 'json_object' } }, max_output_tokens: 300 })
-  })
-  if (!response.ok) throw new Error('AI insights service is unavailable. Check the server AI configuration.')
-  const result = await response.json()
-  const text = result.output_text ?? result.output?.flatMap((entry) => entry.type === 'message' ? entry.content?.filter((part) => part.type === 'output_text').map((part) => part.text) : []).join('')
-  if (!text) throw new Error('AI service returned an empty response.')
-  let parsed
-  try { parsed = JSON.parse(text) } catch { throw new Error('AI service returned invalid insight data.') }
-  const insights = Array.isArray(parsed) ? parsed : parsed.insights
-  if (!Array.isArray(insights) || !insights.length || insights.some((x) => typeof x !== 'string')) throw new Error('AI service returned invalid insight data.')
-  return { insights: insights.slice(0, 4).map((text) => text.slice(0, 240)), source: 'ai' }
+function generateInsights(metrics) {
+  return { insights: rulesBasedInsights(metrics), source: 'metrics' }
 }
 
 async function api(request, response, url) {
@@ -149,7 +200,9 @@ async function api(request, response, url) {
     return
   }
   if (request.method === 'GET' && url.pathname === '/api/auth/config') {
-    sendJson(response, 200, { registrationEnabled: process.env.ALLOW_REGISTRATION === 'true' })
+    const demoUsername = process.env.DEMO_USERNAME?.trim().toLowerCase()
+    const demoAccountEnabled = Boolean(demoUsername && process.env.DEMO_PASSWORD === demoUsername)
+    sendJson(response, 200, { registrationEnabled: process.env.ALLOW_REGISTRATION === 'true', demoUsername: demoAccountEnabled ? demoUsername : null })
     return
   }
   if (request.method === 'GET' && url.pathname === '/api/auth/me') {
@@ -231,6 +284,7 @@ async function serveStatic(request, response, url) {
 
 await initDb()
 await bootstrapAdmin()
+await bootstrapDemoAccount()
 await sql`DELETE FROM app_sessions WHERE expires_at < now()`
 const server = createServer(async (request, response) => {
   secureHeaders(response)
