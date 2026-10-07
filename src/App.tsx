@@ -19,7 +19,10 @@ function App(){
   const [error,setError] = useState('')
   const [filters,setFilters] = useState<Filters>(initialFilters)
   const [updated,setUpdated] = useState(false)
-  useEffect(()=>{ loadDataset().then(setData).catch(e=>setError(e instanceof Error?e.message:'Dashboard data could not be loaded.')) },[])
+  useEffect(()=>{ loadDataset().then(setData).catch(e=>{
+    const message=e instanceof Error?e.message:'Dashboard data could not be loaded.'
+    setError(message==='Failed to fetch'?'Could not reach the dashboard data. Start the dev server from the analytics-dashboard folder, then refresh.':message)
+  }) },[])
   const set = (key:keyof Filters,value:string) => {setFilters(v=>({...v,[key]:value,...(key==='group'&&v.item&&!data?.meta.items.includes(v.item)?{item:''}:{})}));setUpdated(true)}
   const reset = () => {setFilters(initialFilters);setUpdated(false)}
 
