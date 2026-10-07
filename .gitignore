@@ -6,4 +6,5 @@ __pycache__/
 *.py[cod]
 *.xlsx
 *.db
+/data/*.gz
 .DS_Store

@@ -1,20 +1,26 @@
 {
-  "name": "burger-town-analytics-dashboard",
+  "name": "analytics-dashboard",
   "private": true,
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite --host 0.0.0.0",
+    "dev": "node scripts/dev.mjs",
+    "start": "node server/index.mjs",
     "build": "vite build",
-    "preview": "vite preview --host 0.0.0.0",
+    "preview": "npm run start",
     "data:build": "python scripts/build_data.py",
+    "db:seed": "node scripts/seed_neon.mjs",
     "typecheck": "tsc --noEmit"
   },
+  "engines": { "node": ">=22" },
   "dependencies": {
+    "@neondatabase/serverless": "^1.2.0",
+    "dotenv": "^18.0.6",
+    "echarts": "^6.1.0",
+    "echarts-for-react": "^3.0.6",
     "lucide-react": "^0.468.0",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1",
-    "recharts": "^2.15.0"
+    "react-dom": "^18.3.1"
   },
   "devDependencies": {
     "@types/node": "^26.6.4",

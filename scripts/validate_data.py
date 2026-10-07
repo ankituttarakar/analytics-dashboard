@@ -11,7 +11,7 @@ parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("workbook", type=Path)
 args = parser.parse_args()
 source = pd.read_excel(args.workbook, sheet_name="Sheet1")
-with gzip.open(root / "public" / "data" / "dashboard.json.gz", "rt", encoding="utf-8") as f:
+with gzip.open(root / "data" / "dashboard.json.gz", "rt", encoding="utf-8") as f:
     payload = json.load(f)
 meta = payload["meta"]
 line_revenue = sum(row[6] for row in payload["lines"])

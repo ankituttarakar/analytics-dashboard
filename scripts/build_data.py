@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("workbook", type=Path, help="Path to the assessment data.xlsx workbook")
 SOURCE = parser.parse_args().workbook
-OUT = ROOT / "public" / "data"
+OUT = ROOT / "data"
 OUT.mkdir(parents=True, exist_ok=True)
 
 df = pd.read_excel(SOURCE, sheet_name="Sheet1")
