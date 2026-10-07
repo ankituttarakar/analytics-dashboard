@@ -5,7 +5,7 @@ function addSecurityHeaders(response) {
   response.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin')
   response.setHeader('X-Frame-Options', 'DENY')
   response.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()')
-  response.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self' data:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'")
+  response.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data:; connect-src 'self'; font-src 'self' data: https://fonts.gstatic.com; object-src 'none'; base-uri 'self'; frame-ancestors 'none'")
 }
 
 export default async function handler(request, response) {
