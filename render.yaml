@@ -14,15 +14,3 @@ services:
         value: production
       - key: DATABASE_URL
         sync: false
-      - key: SESSION_SECRET
-        generateValue: true
-      - key: ADMIN_EMAIL
-        sync: false
-      - key: ADMIN_PASSWORD
-        sync: false
-      - key: DEMO_USERNAME
-        value: californiaburrito
-      - key: DEMO_PASSWORD
-        value: californiaburrito
-      - key: ALLOW_REGISTRATION
-        value: "true"

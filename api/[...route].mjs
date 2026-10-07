@@ -10,25 +10,13 @@ function addSecurityHeaders(response) {
 
 export default async function handler(request, response) {
   addSecurityHeaders(response)
-  const pathname = new URL(request.url || '/', `https://${request.headers.host || 'localhost'}`).pathname
-
-  // Login options are environment configuration, so let the page display them
-  // even if Neon is temporarily unreachable.
-  if (request.method === 'GET' && pathname === '/api/auth/config') {
-    const demoUsername = process.env.DEMO_USERNAME?.trim().toLowerCase()
-    const demoAccountEnabled = Boolean(demoUsername && process.env.DEMO_PASSWORD === demoUsername)
-    response.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' })
-    response.end(JSON.stringify({ registrationEnabled: process.env.ALLOW_REGISTRATION === 'true', demoUsername: demoAccountEnabled ? demoUsername : null }))
-    return
-  }
-
   try {
     const { handleApiRequest } = await import('../server/index.mjs')
     await handleApiRequest(request, response)
   } catch {
     if (response.headersSent) return response.destroy()
     response.writeHead(503, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' })
-    response.end(JSON.stringify({ error: 'The sign-in service is not configured. Check the deployment environment variables.' }))
+    response.end(JSON.stringify({ error: 'The dashboard service is unavailable. Check its database configuration.' }))
   }
 }
 

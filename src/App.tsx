@@ -18,6 +18,22 @@ const compact = new Intl.NumberFormat('en-IN',{notation:'compact',maximumFractio
 const dayLabel = (day:string) => new Date(`${day}T00:00:00`).toLocaleDateString('en-IN',{day:'numeric',month:'short'})
 const COLORS = ['#5859e8','#2c9b78','#f0a14a','#df6976','#4197b7','#8066c7','#9aa3af']
 const initialFilters:Filters = {from:'',to:'',outlet:'',group:'',item:'',orderType:'',settlement:''}
+const DEMO_USERNAME = 'californiaburrito'
+const ACCOUNTS_KEY = 'burger-town.accounts.v1'
+const SESSION_KEY = 'burger-town.session.v1'
+type BrowserAccount = { email:string; displayName:string; salt:string; passwordHash:string }
+const readAccounts = ():BrowserAccount[] => {
+  try {
+    const value = JSON.parse(localStorage.getItem(ACCOUNTS_KEY) || '[]')
+    return Array.isArray(value) ? value.filter((account):account is BrowserAccount => account && typeof account.email === 'string' && typeof account.displayName === 'string' && typeof account.salt === 'string' && typeof account.passwordHash === 'string') : []
+  } catch { return [] }
+}
+const hex = (bytes:Uint8Array) => Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('')
+async function hashLocalPassword(password:string, salt:string) {
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveBits'])
+  const bits = await crypto.subtle.deriveBits({ name:'PBKDF2', salt:new TextEncoder().encode(salt), iterations:150000, hash:'SHA-256' }, key, 256)
+  return hex(new Uint8Array(bits))
+}
 echarts.use([BarChart,LineChart,PieChart,GridComponent,TooltipComponent,CanvasRenderer])
 
 function App(){
@@ -35,7 +51,16 @@ function App(){
   const [helpOpen,setHelpOpen] = useState(false)
   const [workspaceOpen,setWorkspaceOpen] = useState(false)
   const [darkMode,setDarkMode] = useState(false)
-  useEffect(()=>{Promise.all([fetch('/api/auth/me',{credentials:'same-origin'}),fetch('/api/auth/config',{credentials:'same-origin'})]).then(async([sessionResponse,configResponse])=>{if(sessionResponse.ok){const result=await sessionResponse.json();setUser(result.user)}else setAuthRequired(true);if(configResponse.ok){const config=await configResponse.json();setRegistrationEnabled(config.registrationEnabled===true);setDemoUsername(typeof config.demoUsername==='string'?config.demoUsername:null)}}).catch(()=>setAuthRequired(true)).finally(()=>setAuthReady(true))},[])
+  useEffect(()=>{
+    setRegistrationEnabled(true)
+    setDemoUsername(DEMO_USERNAME)
+    try {
+      const saved = JSON.parse(localStorage.getItem(SESSION_KEY) || 'null')
+      if (saved && typeof saved.email === 'string' && typeof saved.displayName === 'string') setUser(saved)
+      else setAuthRequired(true)
+    } catch { setAuthRequired(true) }
+    finally { setAuthReady(true) }
+  },[])
   useEffect(()=>{if(!user)return;loadDataset().then(setData).catch(e=>{if(e?.status===401){setUser(null);setAuthRequired(true);return}const message=e instanceof Error?e.message:'Dashboard data could not be loaded.';setError(message==='Failed to fetch'?'Could not reach the dashboard API. Check that both the Node API and Vite server are running.':message)})},[user])
   const set = (key:keyof Filters,value:string) => {setFilters(v=>({...v,[key]:value,...(key==='group'&&v.item&&!data?.meta.items.includes(v.item)?{item:''}:{})}))}
   const reset = () => setFilters(initialFilters)
@@ -75,32 +100,37 @@ function App(){
     return result.slice(0,4)
   },[view])
 
-  const signOut=async()=>{await fetch('/api/auth/logout',{method:'POST',credentials:'same-origin'}).catch(()=>{});setUser(null);setData(null);setAuthRequired(true);setAuthError('')}
+  const signOut=()=>{localStorage.removeItem(SESSION_KEY);setUser(null);setData(null);setAuthRequired(true);setAuthError('')}
   const submitAuth = async (mode: 'login' | 'register', values: { name: string; email: string; password: string }) => {
     setAuthError('')
+    const email = values.email.trim().toLowerCase()
+    const isCalifornia = mode === 'login' && email === DEMO_USERNAME && values.password === DEMO_USERNAME
     try {
-      const response = await fetch(`/api/auth/${mode}`, {
-        method: 'POST',
-        credentials: 'same-origin',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(values),
-      })
-      const result = await response.json()
-      if (!response.ok) {
-        setAuthError(result.error || `Could not ${mode === 'login' ? 'sign in' : 'create account'}.`)
-        return
-      }
-      const isCalifornia = mode === 'login'
-        && !!demoUsername
-        && values.email.trim().toLowerCase() === demoUsername.toLowerCase()
-        && values.password === demoUsername
+      let nextUser:{email:string;displayName:string}
       if (isCalifornia) {
-        setCaliforniaIntro(true)
+        nextUser = { email:DEMO_USERNAME, displayName:'California Burrito Guest' }
+      } else if (mode === 'register') {
+        const displayName = values.name.trim()
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return setAuthError('Enter a valid email address to create your account.')
+        if (values.password.length < 12) return setAuthError('Use a password with at least 12 characters.')
+        if (!displayName) return setAuthError('Enter your name to create your account.')
+        const accounts = readAccounts()
+        if (accounts.some(account => account.email === email)) return setAuthError('An account with this email already exists in this browser.')
+        const salt = hex(crypto.getRandomValues(new Uint8Array(16)))
+        const account:BrowserAccount = { email, displayName:displayName.slice(0, 80), salt, passwordHash:await hashLocalPassword(values.password, salt) }
+        localStorage.setItem(ACCOUNTS_KEY, JSON.stringify([...accounts, account]))
+        nextUser = { email:account.email, displayName:account.displayName }
+      } else {
+        const account = readAccounts().find(item => item.email === email)
+        if (!account || await hashLocalPassword(values.password, account.salt) !== account.passwordHash) return setAuthError('Email or password is incorrect.')
+        nextUser = { email:account.email, displayName:account.displayName }
       }
+      localStorage.setItem(SESSION_KEY, JSON.stringify(nextUser))
+      if (isCalifornia) setCaliforniaIntro(true)
       setAuthRequired(false)
-      setUser(result.user)
+      setUser(nextUser)
     } catch {
-      setAuthError(`Could not reach the ${mode === 'login' ? 'sign-in' : 'sign-up'} service. Check the API server and try again.`)
+      setAuthError('Could not save this account in your browser. Check that browser storage is available and try again.')
     }
   }
 
@@ -339,7 +369,7 @@ function LoginScreen({
         <button className="login-submit" disabled={busy}>
           {busy ? (registering ? 'Creating account…' : 'Signing in…') : (registering ? 'Create account' : 'Sign in')}
         </button>
-        <small className="login-foot-note">Your session is secured with an HTTP-only cookie.</small>
+        <small className="login-foot-note">Your demo sign-in is saved in this browser.</small>
       </form>
     </main>
   )
@@ -434,7 +464,7 @@ function CaliforniaBurritoIntro({ onFinish }: { onFinish?: () => void }) {
 }
 function Select({label,value,options,onChange}:{label:string;value:string;options:string[];onChange:(v:string)=>void}){return <label className="filter-control"><span>{label}</span><select value={value} onChange={e=>onChange(e.target.value)}><option value="">All {label.toLowerCase()}s</option>{options.map(o=><option key={o} value={o}>{o}</option>)}</select></label>}
 async function loadDataset():Promise<Dataset>{
-  const response=await fetch('/api/dashboard',{credentials:'same-origin'})
+  const response=await fetch('/api/dashboard')
   if(!response.ok){const failure=new Error(response.status===503?'Dashboard data is not in Neon yet. Run npm run db:seed.':response.status===401?'Sign in to continue.':'Dashboard data could not be loaded.') as Error&{status:number};failure.status=response.status;throw failure}
   const packed=await response.json() as {meta:Dataset['meta'];days:string[];lines:number[][];orders:number[][]}
   const day=(i:number)=>packed.days[i]

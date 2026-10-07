@@ -1,9 +1,11 @@
 import { spawn } from 'node:child_process'
-import { createConnection } from 'node:net'
+import { createServer } from 'node:net'
 import { setTimeout as delay } from 'node:timers/promises'
 
 const children = []
 let stopping = false
+const preferredPort = Number(process.env.PORT || 3001)
+const apiPortLimit = preferredPort + 10
 
 function stop(code = 0) {
   stopping = true
@@ -11,48 +13,81 @@ function stop(code = 0) {
   process.exit(code)
 }
 
-function track(child) {
+function track(child, tolerateFailure = false) {
   children.push(child)
-  child.on('exit', (code) => { if (!stopping && code !== 0) stop(code || 1) })
+  child.on('exit', (code) => { if (!stopping && code !== 0 && !tolerateFailure) stop(code || 1) })
   return child
 }
 
-async function apiIsReady() {
+async function apiIsReady(port) {
   try {
-    const response = await fetch('http://localhost:3001/api/health', { signal: AbortSignal.timeout(1000) })
-    return response.ok
+    const response = await fetch(`http://127.0.0.1:${port}/api/health`, { signal: AbortSignal.timeout(1000) })
+    if (!response.ok) return false
+    const status = await response.json()
+    return status.authentication === 'browser-local'
   } catch { return false }
 }
 
-function portIsOccupied() {
+function portIsOccupied(port) {
   return new Promise((resolve) => {
-    const socket = createConnection({ host: '127.0.0.1', port: 3001 })
-    const finish = (occupied) => { socket.destroy(); resolve(occupied) }
-    socket.setTimeout(750, () => finish(false))
-    socket.once('connect', () => finish(true))
-    socket.once('error', () => finish(false))
+    const probe = createServer()
+    probe.once('error', error => resolve(error.code === 'EADDRINUSE'))
+    probe.listen(port, '0.0.0.0', () => probe.close(() => resolve(false)))
+  })
+}
+
+function waitForApi(child, port) {
+  return new Promise((resolve) => {
+    let output = ''
+    let settled = false
+    const finish = (ready) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolve(ready)
+    }
+    const timer = setTimeout(() => finish(false), 30_000)
+    const forward = (stream) => stream?.on('data', (chunk) => {
+      const text = chunk.toString()
+      output = (output + text).slice(-2000)
+      process.stdout.write(text)
+      if (output.includes(`Analytics API ready at http://localhost:${port}`)) finish(true)
+      else if (output.includes('EADDRINUSE')) finish(false)
+    })
+    forward(child.stdout)
+    forward(child.stderr)
+    child.once('error', () => finish(false))
+    child.once('exit', () => finish(false))
   })
 }
 
 async function start() {
-  const reuseApi = await apiIsReady()
-  if (!reuseApi && await portIsOccupied()) {
-    console.error('Port 3001 is already in use, but its API health check failed. Stop the process using port 3001, then run npm run dev again.')
-    stop(1)
-    return
-  }
-  if (!reuseApi) track(spawn(process.execPath, ['--watch', 'server/index.mjs'], { stdio: 'inherit', env: process.env }))
-  const deadline = Date.now() + 30_000
-  while (!stopping && Date.now() < deadline) {
-    if (await apiIsReady()) {
-      if (reuseApi) console.info('Using the analytics API already running at http://localhost:3001.')
-      track(spawn(process.execPath, ['node_modules/vite/bin/vite.js', '--host', '0.0.0.0'], { stdio: 'inherit', env: process.env }))
+  for (let port = preferredPort; port <= apiPortLimit && !stopping; port++) {
+    if (await apiIsReady(port)) {
+      console.info(`Using the analytics API already running at http://localhost:${port}.`)
+      track(spawn(process.execPath, ['node_modules/vite/bin/vite.js', '--host', '0.0.0.0'], {
+        stdio: 'inherit', env: { ...process.env, VITE_API_TARGET: `http://localhost:${port}` },
+      }))
       return
     }
-    await delay(250)
+    if (await portIsOccupied(port)) {
+      console.warn(`Port ${port} is occupied by another service; checking the next port.`)
+      continue
+    }
+    const child = track(spawn(process.execPath, ['--watch', 'server/index.mjs'], {
+      stdio: ['inherit', 'pipe', 'pipe'], env: { ...process.env, PORT: String(port) },
+    }), true)
+    if (await waitForApi(child, port)) {
+      track(spawn(process.execPath, ['node_modules/vite/bin/vite.js', '--host', '0.0.0.0'], {
+        stdio: 'inherit', env: { ...process.env, VITE_API_TARGET: `http://localhost:${port}` },
+      }))
+      return
+    }
+    if (!stopping && child.exitCode === null) child.kill('SIGTERM')
+    if (!stopping) console.warn(`Could not start the analytics API on port ${port}; checking the next port.`)
   }
   if (!stopping) {
-    console.error('The analytics API did not become ready within 30 seconds.')
+    console.error(`No working analytics API port was found between ${preferredPort} and ${apiPortLimit}.`)
     stop(1)
   }
 }

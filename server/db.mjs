@@ -1,13 +1,17 @@
 import 'dotenv/config'
+import { existsSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { neon } from '@neondatabase/serverless'
 
-if (!process.env.DATABASE_URL) {
+const localSnapshotAvailable = process.env.NODE_ENV !== 'production' && existsSync(resolve('data/dashboard.json.gz'))
+if (!process.env.DATABASE_URL && !localSnapshotAvailable) {
   throw new Error('DATABASE_URL is missing. Copy .env.example to .env and add your Neon connection string.')
 }
 
-export const sql = neon(process.env.DATABASE_URL)
+export const sql = process.env.DATABASE_URL ? neon(process.env.DATABASE_URL) : null
 
 export async function initDb() {
+  if (!sql) throw new Error('DATABASE_URL is required to initialize Neon.')
   await sql`CREATE TABLE IF NOT EXISTS dashboard_meta (
     id smallint PRIMARY KEY CHECK (id = 1), payload jsonb NOT NULL, loaded_at timestamptz NOT NULL DEFAULT now()
   )`
@@ -27,13 +31,4 @@ export async function initDb() {
   await sql`CREATE INDEX IF NOT EXISTS line_cube_outlet_idx ON line_cube(outlet, day)`
   await sql`CREATE INDEX IF NOT EXISTS line_cube_category_idx ON line_cube(category, item, day)`
   await sql`CREATE INDEX IF NOT EXISTS order_cube_day_idx ON order_cube(day)`
-  await sql`CREATE TABLE IF NOT EXISTS app_users (
-    id uuid PRIMARY KEY, email text UNIQUE NOT NULL, password_hash text NOT NULL,
-    display_name text NOT NULL, created_at timestamptz NOT NULL DEFAULT now()
-  )`
-  await sql`CREATE TABLE IF NOT EXISTS app_sessions (
-    id text PRIMARY KEY, user_id uuid NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
-    expires_at timestamptz NOT NULL, created_at timestamptz NOT NULL DEFAULT now()
-  )`
-  await sql`CREATE INDEX IF NOT EXISTS app_sessions_expiry_idx ON app_sessions(expires_at)`
 }

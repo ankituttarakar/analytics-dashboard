@@ -7,7 +7,8 @@ A sales analytics dashboard for Burger Town, built with React and TypeScript, a 
 - Filter by date, outlet, category, menu item, order type, and payment channel.
 - View revenue, orders, product performance, outlet comparisons, and sales channels.
 - Export the current filtered view as CSV.
-- Sign in or create an account. Passwords use scrypt hashes and sessions use signed, HTTP-only cookies.
+- Create an account or sign in using browser-local demo accounts; passwords are PBKDF2-hashed before storage.
+- California Burrito demo access (`californiaburrito`) triggers a short welcome animation.
 - Responsive desktop and mobile layouts with section navigation.
 - Sales highlights are calculated directly from filtered metrics; the app does not call an AI provider.
 - Compressed dashboard responses and five-minute server-side data caching.
@@ -21,7 +22,7 @@ A sales analytics dashboard for Burger Town, built with React and TypeScript, a 
 
 ## Run locally
 
-Requirements: Node.js 22 or later and access to a Neon database that has been seeded with the dashboard aggregates.
+Requirements: Node.js 22 or later. Local development uses the ignored `data/dashboard.json.gz` snapshot when available; otherwise it needs a Neon database seeded with the dashboard aggregates. Vercel production requires Neon.
 
 1. Install Node dependencies and create a local environment file:
 
@@ -30,11 +31,7 @@ Requirements: Node.js 22 or later and access to a Neon database that has been se
    Copy-Item .env.example .env
    ```
 
-2. Edit `.env` and set `DATABASE_URL`, a random `SESSION_SECRET` of at least 32 characters, `ADMIN_EMAIL`, and `ADMIN_PASSWORD` (at least 12 characters). Generate a session secret with:
-
-   ```powershell
-   node -e "console.log(require('node:crypto').randomBytes(48).toString('base64url'))"
-   ```
+2. If you do not have the local dashboard snapshot, edit `.env` and set `DATABASE_URL` to your Neon connection string. No login-related environment variables are required.
 
 3. Start the API and frontend together:
 
@@ -42,9 +39,11 @@ Requirements: Node.js 22 or later and access to a Neon database that has been se
    npm run dev
    ```
 
-   Open the Vite URL shown in the terminal, usually `http://localhost:5173`. Sign in with the configured admin account, use the evaluator demo account, or create an account if `ALLOW_REGISTRATION=true`.
+   Open the Vite URL shown in the terminal, usually `http://localhost:5173`. Create an account in the browser or use the evaluator demo account.
 
-   **Evaluator demo access:** username `californiaburrito`, password `californiaburrito`. A successful sign-in with this configured demo account plays the California Burrito welcome animation; regular accounts go directly to the dashboard.
+   **Evaluator demo access:** username `californiaburrito`, password `californiaburrito`. This sign-in plays the California Burrito welcome animation; other accounts go directly to the dashboard.
+
+   Accounts and the signed-in state are saved in the current browser only. They do not sync across devices or browsers. This is a presentation/demo gate, not security or access control; anyone can bypass it and the assessment dashboard data API is public.
 
 To verify the frontend and TypeScript:
 
@@ -73,8 +72,8 @@ Revenue is `Price × Quantity`. The assessment data contains 300,000 sale lines 
 
 ## Deployment and security
 
-For Vercel, the root `api/[...route].mjs` function serves the existing Node API alongside the Vite frontend. Add `DATABASE_URL`, a random `SESSION_SECRET` of at least 32 characters, `ALLOW_REGISTRATION=true`, `DEMO_USERNAME=californiaburrito`, and `DEMO_PASSWORD=californiaburrito` in the Vercel project’s environment settings, then redeploy. Seed Neon before deployment; `.env` is local only and is not uploaded. The Render Blueprint is in `render.yaml`; set database and admin secrets in Render’s private environment settings. The Docker image also runs the Node API and built frontend; supply its environment with `--env-file .env`.
+For Vercel, the root `api/[...route].mjs` function serves the dashboard data API alongside the Vite frontend. Add `DATABASE_URL` in the Vercel project’s environment settings and seed Neon before deployment. Login is handled in the browser and needs no auth environment variables. `.env` is local only and is not uploaded. The Render Blueprint is in `render.yaml`; set the database URL in its private environment settings. The Docker image also runs the Node API and built frontend; supply its environment with `--env-file .env`.
 
-The app uses same-origin `/api` routes, so it does not need `VITE_AUTH_URL` or `VITE_DEMO_USERNAME`; keep database credentials, session secrets, and demo-password configuration in server-side environment variables only. For the same login experience locally and on Vercel, set the Vercel server variables above and deploy the same Git commit as the local checkout. To disable the California Burrito intro, remove the `setCaliforniaIntro(true)` call in `src/App.tsx`; to hide the hint and disable the demo-trigger check, unset `DEMO_USERNAME` and `DEMO_PASSWORD` in the server environment.
+The login screen uses no auth API. Demo accounts created by evaluators are browser-local; the built-in `californiaburrito` credentials are intentionally public. For private data or real user accounts, replace this demo gate with a trusted server-side authentication provider before deployment.
 
-Never commit `.env`, database URLs, passwords, or private source data. `.env.example` contains sample configuration and the intentionally public demo-account defaults; use demo credentials only with the assessment dataset. GitHub Actions runs `npm audit`, typecheck, and the production build on pushes and pull requests.
+Never commit `.env`, database URLs, passwords, or private source data. GitHub Actions runs `npm audit`, typecheck, and the production build on pushes and pull requests.

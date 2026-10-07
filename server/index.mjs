@@ -3,10 +3,8 @@ import { createServer } from 'node:http'
 import { createReadStream, existsSync, readFileSync } from 'node:fs'
 import { extname, resolve, sep } from 'node:path'
 import { gzipSync, gunzipSync } from 'node:zlib'
-import { randomUUID } from 'node:crypto'
 import { setTimeout as delay } from 'node:timers/promises'
 import { sql, initDb } from './db.mjs'
-import { authenticate, bootstrapAdmin, bootstrapDemoAccount, clearSessionCookie, createSession, getSession, hashPassword, sessionCookie } from './security.mjs'
 
 const port = Number(process.env.PORT || 3001)
 const maxBodyBytes = 64 * 1024
@@ -15,6 +13,7 @@ let dashboardCache
 let dashboardLoadPromise
 const insightCache = new Map()
 const mimeTypes = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.json': 'application/json; charset=utf-8', '.gz': 'application/gzip', '.woff2': 'font/woff2' }
+const hasLocalDashboardSnapshot = () => process.env.NODE_ENV !== 'production' && existsSync(resolve('data/dashboard.json.gz'))
 
 function sendJson(response, status, value, headers = {}) {
   response.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', ...headers })
@@ -71,15 +70,6 @@ function checkSameOrigin(request, response) {
   } catch { /* rejected below */ }
   sendJson(response, 403, { error: 'Cross-origin request rejected.' })
   return true
-}
-
-async function requireUser(request, response) {
-  const session = await getSession(request)
-  if (!session) {
-    sendJson(response, 401, { error: 'Sign in to continue.' })
-    return null
-  }
-  return session
 }
 
 async function loadPackedDashboard() {
@@ -194,66 +184,17 @@ function generateInsights(metrics) {
 }
 
 async function api(request, response, url) {
-  const secure = process.env.NODE_ENV === 'production'
   if (request.method === 'GET' && url.pathname === '/api/health') {
-    sendJson(response, 200, { ok: true, database: 'connected' })
-    return
-  }
-  if (request.method === 'GET' && url.pathname === '/api/auth/config') {
-    const demoUsername = process.env.DEMO_USERNAME?.trim().toLowerCase()
-    const demoAccountEnabled = Boolean(demoUsername && process.env.DEMO_PASSWORD === demoUsername)
-    sendJson(response, 200, { registrationEnabled: process.env.ALLOW_REGISTRATION === 'true', demoUsername: demoAccountEnabled ? demoUsername : null })
-    return
-  }
-  if (request.method === 'GET' && url.pathname === '/api/auth/me') {
-    const user = await getSession(request)
-    if (!user) sendJson(response, 401, { error: 'Sign in to continue.' })
-    else sendJson(response, 200, { user: { email: user.email, displayName: user.displayName } })
-    return
-  }
-  if (request.method === 'POST' && url.pathname === '/api/auth/login') {
-    if (rateLimit(request, response, 'login', 8)) return
-    if (checkSameOrigin(request, response)) return
-    const body = await readJson(request)
-    if (typeof body.email !== 'string' || typeof body.password !== 'string' || body.password.length > 256) return sendJson(response, 400, { error: 'Enter a valid email and password.' })
-    const user = await authenticate(body.email, body.password)
-    if (!user) return sendJson(response, 401, { error: 'Email or password is incorrect.' })
-    const sessionId = await createSession(user.id)
-    sendJson(response, 200, { user: { email: user.email, displayName: user.displayName } }, { 'Set-Cookie': sessionCookie(sessionId, secure) })
-    return
-  }
-  if (request.method === 'POST' && url.pathname === '/api/auth/register') {
-    if (rateLimit(request, response, 'register', 5)) return
-    if (checkSameOrigin(request, response)) return
-    if (process.env.ALLOW_REGISTRATION !== 'true') return sendJson(response, 403, { error: 'Account registration is disabled. Ask the dashboard administrator for an account.' })
-    const body = await readJson(request)
-    const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : ''
-    const password = typeof body.password === 'string' ? body.password : ''
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || password.length < 12 || password.length > 256) return sendJson(response, 400, { error: 'Use a valid email and a password with at least 12 characters.' })
-    const name = typeof body.name === 'string' && body.name.trim() ? body.name.trim().slice(0, 80) : email.split('@')[0]
-    const id = randomUUID()
-    try { await sql`INSERT INTO app_users (id, email, password_hash, display_name) VALUES (${id}, ${email}, ${hashPassword(password)}, ${name})` }
-    catch (error) { if (error?.code === '23505') return sendJson(response, 409, { error: 'An account with this email already exists.' }); throw error }
-    const sessionId = await createSession(id)
-    sendJson(response, 201, { user: { email, displayName: name } }, { 'Set-Cookie': sessionCookie(sessionId, secure) })
-    return
-  }
-  if (request.method === 'POST' && url.pathname === '/api/auth/logout') {
-    if (checkSameOrigin(request, response)) return
-    const user = await getSession(request)
-    if (user) await sql`DELETE FROM app_sessions WHERE id = ${user.sessionId}`
-    sendJson(response, 200, { ok: true }, { 'Set-Cookie': clearSessionCookie(secure) })
+    sendJson(response, 200, { ok: true, authentication: 'browser-local', database: hasLocalDashboardSnapshot() ? 'local snapshot' : 'connected' })
     return
   }
   if (request.method === 'GET' && url.pathname === '/api/dashboard') {
-    if (!await requireUser(request, response)) return
     const snapshot = await getPackedDashboard()
     response.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', Vary: 'Accept-Encoding', ...(request.headers['accept-encoding']?.includes('gzip') ? { 'Content-Encoding': 'gzip' } : {}) })
     response.end(request.headers['accept-encoding']?.includes('gzip') ? snapshot.compressed : snapshot.body)
     return
   }
   if (request.method === 'POST' && url.pathname === '/api/insights') {
-    if (!await requireUser(request, response)) return
     if (rateLimit(request, response, 'insights', 20)) return
     if (checkSameOrigin(request, response)) return
     const metrics = sanitizeMetrics(await readJson(request))
@@ -286,10 +227,8 @@ let initialization
 async function initializeBackend() {
   if (!initialization) {
     initialization = (async () => {
+      if (hasLocalDashboardSnapshot()) return
       await initDb()
-      await bootstrapAdmin()
-      await bootstrapDemoAccount()
-      await sql`DELETE FROM app_sessions WHERE expires_at < now()`
     })().catch((error) => { initialization = undefined; throw error })
   }
   return initialization
@@ -299,12 +238,6 @@ async function handleRequest(request, response, serveFrontend) {
   secureHeaders(response)
   try {
     const url = new URL(request.url || '/', `http://${request.headers.host || 'localhost'}`)
-    // Auth configuration is safe to serve without a database connection; this
-    // lets the login page show registration/demo options even during DB trouble.
-    if (request.method === 'GET' && url.pathname === '/api/auth/config') {
-      await api(request, response, url)
-      return
-    }
     await initializeBackend()
     if (url.pathname.startsWith('/api/')) await api(request, response, url)
     else if (serveFrontend && (request.method === 'GET' || request.method === 'HEAD')) await serveStatic(request, response, url)
@@ -325,6 +258,4 @@ if (process.env.VERCEL !== '1') {
   await initializeBackend()
   const server = createServer((request, response) => handleRequest(request, response, true))
   server.listen(port, '0.0.0.0', () => console.info(`Analytics API ready at http://localhost:${port}`))
-  const cleanup = setInterval(() => { sql`DELETE FROM app_sessions WHERE expires_at < now()`.catch((error) => console.error('Session cleanup failed:', error)) }, 60 * 60_000)
-  cleanup.unref()
 }
