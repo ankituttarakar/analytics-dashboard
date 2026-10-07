@@ -25,13 +25,14 @@ function App(){
   const [user,setUser] = useState<{email:string;displayName:string}|null>(null)
   const [authReady,setAuthReady] = useState(false)
   const [authRequired,setAuthRequired] = useState(false)
+  const [registrationEnabled,setRegistrationEnabled] = useState(false)
   const [authError,setAuthError] = useState('')
   const [insights,setInsights] = useState<string[]>([])
   const [insightSource,setInsightSource] = useState<'ai'|'metrics'|''>('')
   const [insightLoading,setInsightLoading] = useState(false)
   const [filters,setFilters] = useState<Filters>(initialFilters)
   const [updated,setUpdated] = useState(false)
-  useEffect(()=>{fetch('/api/auth/me',{credentials:'same-origin'}).then(async response=>{if(!response.ok){setAuthRequired(true);return}const result=await response.json();setUser(result.user)}).catch(()=>setAuthRequired(true)).finally(()=>setAuthReady(true))},[])
+  useEffect(()=>{Promise.all([fetch('/api/auth/me',{credentials:'same-origin'}),fetch('/api/auth/config',{credentials:'same-origin'})]).then(async([sessionResponse,configResponse])=>{if(sessionResponse.ok){const result=await sessionResponse.json();setUser(result.user)}else setAuthRequired(true);if(configResponse.ok){const config=await configResponse.json();setRegistrationEnabled(config.registrationEnabled===true)}}).catch(()=>setAuthRequired(true)).finally(()=>setAuthReady(true))},[])
   useEffect(()=>{if(!user)return;loadDataset().then(setData).catch(e=>{if(e?.status===401){setUser(null);setAuthRequired(true);return}const message=e instanceof Error?e.message:'Dashboard data could not be loaded.';setError(message==='Failed to fetch'?'Could not reach the dashboard API. Check that both the Node API and Vite server are running.':message)})},[user])
   const set = (key:keyof Filters,value:string) => {setFilters(v=>({...v,[key]:value,...(key==='group'&&v.item&&!data?.meta.items.includes(v.item)?{item:''}:{})}));setUpdated(true)}
   const reset = () => {setFilters(initialFilters);setUpdated(false)}
@@ -63,10 +64,10 @@ function App(){
   useEffect(()=>{if(!insightInput)return;const timer=window.setTimeout(()=>{setInsightLoading(true);fetch('/api/insights',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:insightInput}).then(async response=>{if(!response.ok)throw new Error('Insights are temporarily unavailable.');return response.json()}).then(result=>{setInsights(result.insights);setInsightSource(result.source)}).catch(()=>{setInsights([]);setInsightSource('')}).finally(()=>setInsightLoading(false))},500);return()=>window.clearTimeout(timer)},[insightInput])
 
   const signOut=async()=>{await fetch('/api/auth/logout',{method:'POST',credentials:'same-origin'}).catch(()=>{});setUser(null);setData(null);setInsights([]);setInsightSource('');setAuthRequired(true);setAuthError('')}
-  const signIn=async(email:string,password:string)=>{setAuthError('');try{const response=await fetch('/api/auth/login',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({email,password})});const result=await response.json();if(!response.ok){setAuthError(result.error||'Could not sign in.');return}setAuthRequired(false);setUser(result.user)}catch{setAuthError('Could not reach the sign-in service. Check the API server and try again.')}}
+  const submitAuth=async(mode:'login'|'register',values:{name:string;email:string;password:string})=>{setAuthError('');try{const response=await fetch(`/api/auth/${mode}`,{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify(values)});const result=await response.json();if(!response.ok){setAuthError(result.error||`Could not ${mode==='login'?'sign in':'create account'}.`);return}setAuthRequired(false);setUser(result.user)}catch{setAuthError(`Could not reach the ${mode==='login'?'sign-in':'sign-up'} service. Check the API server and try again.`)}}
 
   if(!authReady)return <main className="loading"><span className="spinner"/><p>Checking your sign-in…</p></main>
-  if(authRequired)return <LoginScreen onSubmit={signIn} error={authError}/>
+  if(authRequired)return <LoginScreen onSubmit={submitAuth} error={authError} registrationEnabled={registrationEnabled}/>
 
   const exportCsv=()=>{
     if(!view)return
@@ -130,7 +131,25 @@ function App(){
   </div>
 }
 
-function LoginScreen({onSubmit,error}:{onSubmit:(email:string,password:string)=>Promise<void>;error:string}){const [email,setEmail]=useState('');const [password,setPassword]=useState('');const [busy,setBusy]=useState(false);return <main className="login-page"><form className="login-card" onSubmit={async e=>{e.preventDefault();setBusy(true);await onSubmit(email,password);setBusy(false)}}><div className="brand-mark login-mark">B</div><span className="login-eyebrow">BURGER TOWN ANALYTICS</span><h1>Welcome back</h1><p>Sign in to view your business dashboard.</p><label>Email<input type="email" autoComplete="username" required value={email} onChange={e=>setEmail(e.target.value)}/></label><label>Password<input type="password" autoComplete="current-password" required value={password} onChange={e=>setPassword(e.target.value)}/></label>{error&&<div className="login-error" role="alert">{error}</div>}<button className="login-submit" disabled={busy}>{busy?'Signing in…':'Sign in'}</button><small>Your session is secured with an HTTP-only cookie.</small></form></main>}
+function LoginScreen({onSubmit,error,registrationEnabled}:{onSubmit:(mode:'login'|'register',values:{name:string;email:string;password:string})=>Promise<void>;error:string;registrationEnabled:boolean}){
+  const [mode,setMode]=useState<'login'|'register'>('login')
+  const [name,setName]=useState('')
+  const [email,setEmail]=useState('')
+  const [password,setPassword]=useState('')
+  const [busy,setBusy]=useState(false)
+  const registering=mode==='register'
+  return <main className="login-page"><form className="login-card" onSubmit={async e=>{e.preventDefault();setBusy(true);await onSubmit(mode,{name,email,password});setBusy(false)}}>
+    <div className="brand-mark login-mark">B</div><span className="login-eyebrow">BURGER TOWN ANALYTICS</span>
+    <h1>{registering?'Create your account':'Welcome back'}</h1><p>{registering?'Create an account to explore the business dashboard.':'Sign in to view your business dashboard.'}</p>
+    {registrationEnabled&&<div className="auth-mode" role="group" aria-label="Account access"><button type="button" className={!registering?'selected':''} onClick={()=>setMode('login')}>Sign in</button><button type="button" className={registering?'selected':''} onClick={()=>setMode('register')}>Create account</button></div>}
+    {registering&&<label>Name<input type="text" autoComplete="name" maxLength={80} required value={name} onChange={e=>setName(e.target.value)}/></label>}
+    <label>Email<input type="email" autoComplete="email" required value={email} onChange={e=>setEmail(e.target.value)}/></label>
+    <label>Password<input type="password" autoComplete={registering?'new-password':'current-password'} minLength={registering?12:undefined} maxLength={256} required value={password} onChange={e=>setPassword(e.target.value)}/>{registering&&<small className="password-hint">Use at least 12 characters.</small>}</label>
+    {error&&<div className="login-error" role="alert">{error}</div>}
+    <button className="login-submit" disabled={busy}>{busy?(registering?'Creating account…':'Signing in…'):(registering?'Create account':'Sign in')}</button>
+    <small>Your session is secured with an HTTP-only cookie.</small>
+  </form></main>
+}
 function Select({label,value,options,onChange}:{label:string;value:string;options:string[];onChange:(v:string)=>void}){return <label className="filter-control"><span>{label}</span><select value={value} onChange={e=>onChange(e.target.value)}><option value="">All {label.toLowerCase()}s</option>{options.map(o=><option key={o} value={o}>{o}</option>)}</select></label>}
 async function loadDataset():Promise<Dataset>{
   const response=await fetch('/api/dashboard',{credentials:'same-origin'})

@@ -25,6 +25,10 @@ export async function bootstrapAdmin() {
   const password = process.env.ADMIN_PASSWORD
   if (!email || !password) return
   if (password.length < 12 || password.length > 256 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    if (process.env.ALLOW_REGISTRATION === 'true') {
+      console.warn('Skipping initial admin account because its credentials are invalid; public account registration is enabled.')
+      return
+    }
     throw new Error('ADMIN_EMAIL must be valid and ADMIN_PASSWORD must be 12 to 256 characters.')
   }
   const [{ count }] = await sql`SELECT count(*)::int AS count FROM app_users`

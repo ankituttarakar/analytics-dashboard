@@ -148,6 +148,10 @@ async function api(request, response, url) {
     sendJson(response, 200, { ok: true, database: 'connected' })
     return
   }
+  if (request.method === 'GET' && url.pathname === '/api/auth/config') {
+    sendJson(response, 200, { registrationEnabled: process.env.ALLOW_REGISTRATION === 'true' })
+    return
+  }
   if (request.method === 'GET' && url.pathname === '/api/auth/me') {
     const user = await getSession(request)
     if (!user) sendJson(response, 401, { error: 'Sign in to continue.' })

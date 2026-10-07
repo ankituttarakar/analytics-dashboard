@@ -7,7 +7,7 @@ A React + TypeScript sales analytics site with a Node.js API, Neon PostgreSQL, E
 - Responsive overview for desktop and mobile, including revenue, orders, product mix, outlet and channel performance.
 - Combined date, outlet, category, item, order type, and payment filters; all visualizations and KPIs use the same selection.
 - CSV export of the selected KPIs, category and outlet totals, top products, and daily revenue.
-- Email/password sign-in, scrypt password hashes, signed HTTP-only sessions, request throttling, and same-origin checks. Public registration is off by default.
+- Email/password sign-in and self-service account creation, scrypt password hashes, signed HTTP-only sessions, request throttling, and same-origin checks.
 - ECharts visualizations and server-side database access. The dashboard data endpoint requires a valid session.
 - Optional OpenAI-generated insights from aggregate metrics only. With no `OPENAI_API_KEY`, factual metric-based highlights are shown instead. AI requests set `store: false`.
 - Compressed API responses, a five-minute in-memory Neon snapshot cache, indexes for common dimensions, and cached insight responses.
@@ -52,7 +52,7 @@ You need Node.js 22+, a Neon PostgreSQL database, and the assessment workbook fo
    npm run dev
    ```
 
-   Open the Vite URL (normally `http://localhost:5173`). Sign in with `ADMIN_EMAIL` and `ADMIN_PASSWORD` from `.env`.
+   Open the Vite URL (normally `http://localhost:5173`). Sign in with the configured admin credentials, or create an account from the sign-in page.
 
 To validate types and create the production frontend build:
 
@@ -78,7 +78,7 @@ The compressed aggregate is saved under `data/` for seeding, ignored by Git, and
 
 - Never commit `.env`, Neon connection strings, admin passwords, or AI keys. `.env*` is ignored except for the safe `.env.example` template.
 - `SESSION_SECRET` must be a private random value of at least 32 characters. Cookies are HTTP-only and use `Secure` when `NODE_ENV=production`.
-- The first account is bootstrapped from `ADMIN_EMAIL` and `ADMIN_PASSWORD` only when `app_users` is empty. Further accounts can be created from SQL administration. Setting `ALLOW_REGISTRATION=true` enables public sign-up and should be a deliberate choice.
+- The first account is bootstrapped from `ADMIN_EMAIL` and `ADMIN_PASSWORD` only when `app_users` is empty. With `ALLOW_REGISTRATION=true`, visitors can create their own accounts from the sign-in page. This is enabled for evaluator access; anyone who can reach the deployed site can register. If these optional admin credentials are invalid while registration is enabled, startup skips creating the admin so visitors can still sign up.
 - `OPENAI_API_KEY` is optional. If configured, only filtered aggregate sales metrics are sent to the Responses API; no workbook rows, bill numbers, emails, or credentials are included.
 
 ## Deploy
