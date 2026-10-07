@@ -114,9 +114,17 @@ function Select({label,value,options,onChange}:{label:string;value:string;option
 async function loadDataset():Promise<Dataset>{
   const response=await fetch(`${import.meta.env.BASE_URL}data/dashboard.json.gz`)
   if(!response.ok)throw new Error('Dashboard data could not be loaded.')
-  if(!('DecompressionStream' in window))throw new Error('This browser does not support compressed dashboard data. Please use a current browser.')
-  const stream=new Blob([await response.arrayBuffer()]).stream().pipeThrough(new DecompressionStream('gzip'))
-  const packed=await new Response(stream).json() as {meta:Dataset['meta'];days:string[];lines:number[][];orders:number[][]}
+  const bytes=await response.arrayBuffer()
+  let packed:{meta:Dataset['meta'];days:string[];lines:number[][];orders:number[][]}
+  try{
+    // HTTP servers may transparently decompress .gz assets before fetch exposes
+    // the body. Parse that response directly; only inflate bytes if still zipped.
+    packed=JSON.parse(new TextDecoder().decode(bytes))
+  }catch{
+    if(!('DecompressionStream' in window))throw new Error('This browser cannot decompress the dashboard data. Please use a current browser.')
+    const stream=new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'))
+    packed=await new Response(stream).json()
+  }
   const day=(i:number)=>packed.days[i]
   const outlet=(i:number)=>packed.meta.outlets[i]
   const group=(i:number)=>packed.meta.groups[i]
