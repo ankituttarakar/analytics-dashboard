@@ -28,13 +28,14 @@ function App(){
   const [authRequired,setAuthRequired] = useState(false)
   const [registrationEnabled,setRegistrationEnabled] = useState(false)
   const [demoUsername,setDemoUsername] = useState<string|null>(null)
+  const [authServiceUnavailable,setAuthServiceUnavailable] = useState(false)
   const [californiaIntro,setCaliforniaIntro] = useState(false)
   const [authError,setAuthError] = useState('')
   const [filters,setFilters] = useState<Filters>(initialFilters)
   const [activeSection,setActiveSection] = useState<DashboardSection>('overview')
   const [helpOpen,setHelpOpen] = useState(false)
   const [workspaceOpen,setWorkspaceOpen] = useState(false)
-  useEffect(()=>{Promise.all([fetch('/api/auth/me',{credentials:'same-origin'}),fetch('/api/auth/config',{credentials:'same-origin'})]).then(async([sessionResponse,configResponse])=>{if(sessionResponse.ok){const result=await sessionResponse.json();setUser(result.user)}else setAuthRequired(true);if(configResponse.ok){const config=await configResponse.json();setRegistrationEnabled(config.registrationEnabled===true);setDemoUsername(typeof config.demoUsername==='string'?config.demoUsername:null)}}).catch(()=>setAuthRequired(true)).finally(()=>setAuthReady(true))},[])
+  useEffect(()=>{Promise.all([fetch('/api/auth/me',{credentials:'same-origin'}),fetch('/api/auth/config',{credentials:'same-origin'})]).then(async([sessionResponse,configResponse])=>{if(sessionResponse.ok){const result=await sessionResponse.json();setUser(result.user)}else{setAuthRequired(true);if(sessionResponse.status>=500)setAuthServiceUnavailable(true)}if(configResponse.ok){const config=await configResponse.json();setRegistrationEnabled(config.registrationEnabled===true);setDemoUsername(typeof config.demoUsername==='string'?config.demoUsername:null);if(sessionResponse.status<500)setAuthServiceUnavailable(false)}else{setAuthRequired(true);setAuthServiceUnavailable(true)}}).catch(()=>{setAuthRequired(true);setAuthServiceUnavailable(true)}).finally(()=>setAuthReady(true))},[])
   useEffect(()=>{if(!californiaIntro)return;const timer=window.setTimeout(()=>setCaliforniaIntro(false),2800);return()=>window.clearTimeout(timer)},[californiaIntro])
   useEffect(()=>{if(!user)return;loadDataset().then(setData).catch(e=>{if(e?.status===401){setUser(null);setAuthRequired(true);return}const message=e instanceof Error?e.message:'Dashboard data could not be loaded.';setError(message==='Failed to fetch'?'Could not reach the dashboard API. Check that both the Node API and Vite server are running.':message)})},[user])
   const set = (key:keyof Filters,value:string) => {setFilters(v=>({...v,[key]:value,...(key==='group'&&v.item&&!data?.meta.items.includes(v.item)?{item:''}:{})}))}
@@ -79,7 +80,7 @@ function App(){
   const submitAuth=async(mode:'login'|'register',values:{name:string;email:string;password:string})=>{setAuthError('');try{const response=await fetch(`/api/auth/${mode}`,{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify(values)});const result=await response.json();if(!response.ok){setAuthError(result.error||`Could not ${mode==='login'?'sign in':'create account'}.`);return}if(mode==='login'&&demoUsername&&values.email.trim().toLowerCase()===demoUsername)setCaliforniaIntro(true);setAuthRequired(false);setUser(result.user)}catch{setAuthError(`Could not reach the ${mode==='login'?'sign-in':'sign-up'} service. Check the API server and try again.`)}}
 
   if(!authReady)return <main className="loading"><span className="spinner"/><p>Checking your sign-in…</p></main>
-  if(authRequired)return <LoginScreen onSubmit={submitAuth} error={authError} registrationEnabled={registrationEnabled} demoUsername={demoUsername}/>
+  if(authRequired)return <LoginScreen onSubmit={submitAuth} error={authError} registrationEnabled={registrationEnabled} demoUsername={demoUsername} serviceUnavailable={authServiceUnavailable}/>
 
   const exportCsv=()=>{
     if(!view)return
@@ -147,16 +148,17 @@ function App(){
   </div>
 }
 
-function LoginScreen({onSubmit,error,registrationEnabled,demoUsername}:{onSubmit:(mode:'login'|'register',values:{name:string;email:string;password:string})=>Promise<void>;error:string;registrationEnabled:boolean;demoUsername:string|null}){
+function LoginScreen({onSubmit,error,registrationEnabled,demoUsername,serviceUnavailable}:{onSubmit:(mode:'login'|'register',values:{name:string;email:string;password:string})=>Promise<void>;error:string;registrationEnabled:boolean;demoUsername:string|null;serviceUnavailable:boolean}){
   const [mode,setMode]=useState<'login'|'register'>('login')
   const [name,setName]=useState('')
   const [email,setEmail]=useState('')
   const [password,setPassword]=useState('')
   const [busy,setBusy]=useState(false)
   const registering=mode==='register'
-  return <main className="login-page"><form className="login-card" onSubmit={async e=>{e.preventDefault();setBusy(true);await onSubmit(mode,{name,email,password});setBusy(false)}}>
-    <div className="brand-mark login-mark">B</div><span className="login-eyebrow">BURGER TOWN ANALYTICS</span>
+  return <main className="login-page"><section className="login-story" aria-label="Dashboard introduction"><div className="login-story-brand"><span className="brand-mark">B</span><span>BURGER TOWN <b>ANALYTICS</b></span></div><div className="login-story-copy"><span className="login-story-kicker">A clearer view of every order</span><h2>Good decisions<br/>start with <em>good data.</em></h2><p>Explore sales, products, and locations in one simple dashboard.</p><div className="login-story-stats"><span><b>6</b> locations</span><i/><span><b>8</b> menu groups</span></div></div><div className="login-story-art" aria-hidden="true"><span className="story-orbit orbit-one"/><span className="story-orbit orbit-two"/><span className="story-burger">🍔</span><span className="story-spark spark-one">✦</span><span className="story-spark spark-two">✦</span></div><small className="login-story-foot">BURGER TOWN · BUSINESS INTELLIGENCE</small></section><form className="login-card" onSubmit={async e=>{e.preventDefault();setBusy(true);await onSubmit(mode,{name,email,password});setBusy(false)}}>
+    <div className="login-card-heading"><div className="brand-mark login-mark">B</div><span className="login-eyebrow">YOUR BUSINESS, AT A GLANCE</span></div>
     <h1>{registering?'Create your account':'Welcome back'}</h1><p>{registering?'Create an account to explore the business dashboard.':'Sign in to view your business dashboard.'}</p>
+    {serviceUnavailable&&<div className="service-notice" role="status"><span className="service-indicator"/><span><b>Sign-in service is offline</b><small>The page is available, but its API is not connected. On Vercel, the backend must be deployed as API functions before sign-in can work.</small></span></div>}
     {registrationEnabled&&<div className="auth-mode" role="group" aria-label="Account access"><button type="button" className={!registering?'selected':''} onClick={()=>setMode('login')}>Sign in</button><button type="button" className={registering?'selected':''} onClick={()=>setMode('register')}>Create account</button></div>}
     {demoUsername&&<aside className="burrito-hint"><span className="burrito-hint-title">🌯 California Burrito express lane</span><span>Skip the line with these demo credentials:</span><div><b>Username</b><code>{demoUsername}</code></div><div><b>Password</b><code>{demoUsername}</code></div><small>One burrito-powered shortcut to the dashboard.</small></aside>}
     {registering&&<label>Name<input type="text" autoComplete="name" maxLength={80} required value={name} onChange={e=>setName(e.target.value)}/></label>}
